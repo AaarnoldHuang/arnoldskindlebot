@@ -8,12 +8,16 @@ import (
 	"log"
 	"os"
 )
+
 var kindlemails map[int64]string
 var tempemail string = ""
+var downloading chan string
+
 func main() {
 	token := os.Getenv("TELEGRAM_TOKEN")
 	bot, err := tgbot.NewServer(token)
 	kindlemails = make(map[int64]string)
+	downloading = make(chan string)
 	if err != nil {
 		log.Fatal(err)
 		return
@@ -29,7 +33,7 @@ func main() {
 	log.Fatal(err)
 }
 
-func settingsHandle(message *tgbot.Message)  {
+func settingsHandle(message *tgbot.Message) {
 	_, ok := kindlemails[message.ChatID]
 	if !ok {
 		message.Reply("请输入你的Kindle的邮箱,格式： /mail 邮箱")
@@ -64,7 +68,7 @@ func emailAddressHandle(message *tgbot.Message) {
 	}
 }
 
-func replyYesHandle(message *tgbot.Message)  {
+func replyYesHandle(message *tgbot.Message) {
 	kindlemails[message.ChatID] = tempemail
 	message.Replyf("你的邮箱已设置为： %s", tempemail)
 	message.Reply("请发给我你的书籍，大小不要超过20M，一次一本")
@@ -74,7 +78,7 @@ func replyYesHandle(message *tgbot.Message)  {
 	message.ReplyKeyboard("发送你的图书，发送完毕点击Done", buttons)
 }
 
-func replyNoHandle(message *tgbot.Message)  {
+func replyNoHandle(message *tgbot.Message) {
 	message.Reply("好的，不会覆盖你以前的记录")
 	message.Reply("请发给我你的书籍，大小不要超过20M，一次一本")
 	buttons := [][]string{
@@ -89,13 +93,15 @@ func fileHandler(message *tgbot.Message) {
 		message.Replyf("Error handling file: %q", err)
 		return
 	}
+	downloading <- "done"
 }
 
 func replyDoneHandler(message *tgbot.Message) {
+	<-downloading
 	filesmap := make(map[int]string)
 	files, _ := ioutil.ReadDir("./uploads")
 	i := 0
-	for _,file := range files {
+	for _, file := range files {
 		if file.IsDir() {
 			continue
 		} else {
@@ -103,6 +109,12 @@ func replyDoneHandler(message *tgbot.Message) {
 			i++
 		}
 	}
+	_, ok := kindlemails[message.ChatID]
+	if kindlemails[message.ChatID] == "" || !ok {
+		message.Reply("你还没有设置邮箱，先设置邮箱吧！")
+		return
+	}
+	message.Reply("开始发送邮件。。。")
 	m := gomail.NewMessage()
 	m.SetHeader("From", "your email")
 	m.SetHeader("To", kindlemails[message.ChatID])
@@ -111,9 +123,15 @@ func replyDoneHandler(message *tgbot.Message) {
 	for i = 0; i < len(filesmap); i++ {
 		m.Attach(fmt.Sprintf("./uploads/%s", filesmap[i]))
 	}
-	d := gomail.NewDialer("smtp.163.com", 465, "your email", "your password")
+	d := gomail.NewDialer("smtp.163.com", 465, "your email", "password")
 	if err := d.DialAndSend(m); err != nil {
 		panic(err)
 	}
 	message.Reply("发送成功，打开Kindle等待推送吧！")
+	for i = 0; i < len(filesmap); i++ {
+		err := os.Remove(fmt.Sprintf("./uploads/%s", filesmap[i]))
+		if err != nil {
+			fmt.Println("all deleted")
+		}
+	}
 }
